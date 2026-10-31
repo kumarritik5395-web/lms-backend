@@ -24,23 +24,35 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Base & Health check endpoints
+// Base & Health check endpoints (always accessible)
 app.get("/api", (req, res) => {
   res.json({ status: "ok", message: "LMS Backend API is running" });
 });
 
 app.get("/api/health", (req, res) => {
+  const isConnected = mongoose.connection.readyState === 1;
   res.json({
-    status: "ok",
-    database: mongoose.connection.readyState === 1 ? "connected" : "disconnected",
+    status: isConnected ? "ok" : "degraded",
+    database: isConnected ? "connected" : "disconnected",
   });
+});
+
+// Database readiness check middleware:
+// Prevents requests from buffering for 10000ms if DB is not connected
+app.use((req, res, next) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      message: "Database connection is not ready. Please ensure MongoDB is running and MONGO_URI in .env is correct."
+    });
+  }
+  next();
 });
 
 // Application routes
 app.use("/api/auth", authRoutes);
 app.use("/api/books", bookRoutes);
 
-// Global Error Handler to always return clean JSON error messages
+// Global Error Handler
 app.use((err, req, res, next) => {
   console.error("Unhandled Error:", err.stack || err.message);
   const statusCode = err.statusCode || err.status || 500;
@@ -50,24 +62,32 @@ app.use((err, req, res, next) => {
 });
 
 const LOCAL_MONGO = "mongodb://127.0.0.1:27017/library";
-const mongoUri = process.env.MONGO_URI || LOCAL_MONGO;
+const primaryMongoUri = process.env.MONGO_URI || LOCAL_MONGO;
 
-const startServer = async () => {
+const connectWithFallback = async () => {
   try {
-    await mongoose.connect(mongoUri, { serverSelectionTimeoutMS: 5000 });
-    console.log("MongoDB connected successfully:", mongoUri.includes("127.0.0.1") ? "Local MongoDB" : "Remote MongoDB");
+    console.log(`Connecting to MongoDB (${primaryMongoUri.includes("127.0.0.1") ? "Local" : "Remote"})...`);
+    await mongoose.connect(primaryMongoUri, { serverSelectionTimeoutMS: 5000 });
+    console.log("MongoDB connected successfully!");
+    return true;
   } catch (err) {
     console.warn("Primary MongoDB connection failed:", err.message);
-    if (mongoUri !== LOCAL_MONGO) {
+    if (primaryMongoUri !== LOCAL_MONGO) {
       console.log("Attempting fallback to local MongoDB (127.0.0.1:27017)...");
       try {
         await mongoose.connect(LOCAL_MONGO, { serverSelectionTimeoutMS: 5000 });
-        console.log("Local MongoDB connected successfully!");
+        console.log("Fallback to local MongoDB connected successfully!");
+        return true;
       } catch (localErr) {
-        console.error("Local MongoDB also failed:", localErr.message);
+        console.error("Local MongoDB fallback also failed:", localErr.message);
       }
     }
+    return false;
   }
+};
+
+const startServer = async () => {
+  await connectWithFallback();
 
   app.listen(PORT, () => {
     console.log(`Server is running at port ${PORT}`);
