@@ -69,7 +69,7 @@ app.use((err, req, res, next) => {
   });
 });
 
-// const LOCAL_MONGO = "mongodb://127.0.0.1:27017/library";
+const LOCAL_MONGO = "mongodb://127.0.0.1:27017/library";
 const primaryMongoUri = process.env.MONGO_URI || LOCAL_MONGO;
 
 const connectWithFallback = async () => {
